@@ -136,15 +136,15 @@ class Explosion(pygame.sprite.Sprite):
             self.kill()
 
 class Boss(pygame.sprite.Sprite):
-    def __init__(self):
+    def __init__(self, hp_bonus=0, attack_delay=1.0):
         super().__init__()
         self.image = pygame.image.load("./assets/boss.png").convert_alpha()
         self.image = pygame.transform.scale(self.image, (200, 120))  # 보스 크기
         self.rect = self.image.get_rect(center=(WIDTH // 2, 100))  # 화면 상단 중앙
-        self.hp = 30
-        self.max_hp = 30
+        self.hp = 30 + hp_bonus  # 기본 30 + 추가 체력
+        self.max_hp = 30 + hp_bonus
         self.last_attack_time = time.time()
-        self.attack_delay = 1.0  # 1초마다 공격
+        self.attack_delay = attack_delay  # 공격 속도 (초)
         self.alive = True
 
     def update(self):
@@ -154,10 +154,12 @@ class Boss(pygame.sprite.Sprite):
             explosion = Explosion(self.rect.centerx, self.rect.centery, size=200)
             explosion_group.add(explosion)
             self.kill()
-            global score, last_boss_death_time, boss_spawned
+            global score, last_boss_death_time, boss_spawned, boss_kill_count, first_boss_killed
             score += 300  # 보상 점수
             last_boss_death_time = time.time()  # 사망 시간 기록
             boss_spawned = False  # 다음 보스 생성 가능 상태로 전환
+            boss_kill_count += 1  # 보스 처치 카운트 증가
+            first_boss_killed = True  # 첫 번째 보스 이후 계속 리스폰
 
 
         # 일정 시간마다 공격
@@ -183,10 +185,17 @@ class Boss(pygame.sprite.Sprite):
         pygame.draw.rect(surface, (0, 255, 0), (x, y, int(bar_width * ratio), bar_height))
 
 class MovingBoss(Boss):
-    def __init__(self):
-        super().__init__()
-        self.image = pygame.image.load("./assets/MovingBoss.png").convert_alpha()
-        self.image = pygame.transform.scale(self.image, (220, 130))
+    def __init__(self, hp_bonus=0, attack_delay=1.0, is_final=False):
+        super().__init__(hp_bonus, attack_delay)
+        
+        # 최종 보스면 finalBoss 이미지 사용
+        if is_final:
+            self.image = pygame.image.load("./assets/finalBoss.png").convert_alpha()
+            self.image = pygame.transform.scale(self.image, (240, 150))  # 최종 보스는 더 크게
+        else:
+            self.image = pygame.image.load("./assets/MovingBoss.png").convert_alpha()
+            self.image = pygame.transform.scale(self.image, (220, 130))
+        
         self.rect = self.image.get_rect(center=(WIDTH // 2, 100))
         self.speed_x = 3  # 좌우 이동 속도
 
@@ -289,6 +298,8 @@ boss_spawned = False
 last_boss_death_time = 0
 warning_shown = False  # 경고 표시 여부
 warning_start_time = 0  # 경고 시작 시간
+boss_kill_count = 0  # 보스 처치 횟수
+first_boss_killed = False  # 첫 번째 보스 처치 여부
 
 score = 0
 frame_count = 0
@@ -324,7 +335,7 @@ while running:
             coin_group.add(Coin())
 
         # 🔹 랜덤하게 총알 아이템 생성 (약 0.3% 확률)
-        if random.randint(1, 1000) <= 3:
+        if random.randint(1, 100) <= 3:
             bullet_item_group.add(BulletItem())
 
         # 🔫 gun_level이 3 미만일 때만 gunItem 생성
@@ -396,7 +407,7 @@ while running:
         survival_time = time.time() - start_time
 
         # 첫 번째 보스 경고 및 생성
-        if survival_time >= 8 and not warning_shown and not boss_spawned and last_boss_death_time == 0:
+        if survival_time >= 8 and not warning_shown and not boss_spawned and not first_boss_killed:
             warning = Warning()
             warning_group.add(warning)
             warning_shown = True
@@ -404,15 +415,16 @@ while running:
             # print("⚠️ 보스 경고!")
         
         # 경고 후 2초 뒤 첫 번째 보스 생성
-        if warning_shown and not boss_spawned and not boss_group and last_boss_death_time == 0 and time.time() - warning_start_time >= 2:
-            boss = Boss()
+        if warning_shown and not boss_spawned and not boss_group and not first_boss_killed and time.time() - warning_start_time >= 2:
+            boss = Boss()  # 첫 보스는 기본 스탯
             boss_group.add(boss)
             boss_spawned = True
             warning_shown = False
+            first_boss_killed = False
             # print("✅ 첫 번째 보스 등장")
 
-        # 다음 보스 경고 및 생성
-        if not warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - last_boss_death_time >= 18:
+        # 첫 번째 보스 처치 후 계속 리스폰되는 보스 시스템
+        if first_boss_killed and not warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - last_boss_death_time >= 18:
             warning = Warning()
             warning_group.add(warning)
             warning_shown = True
@@ -420,12 +432,21 @@ while running:
             # print("⚠️ 보스 경고!")
         
         # 경고 후 2초 뒤 이동형 보스 생성 (첫 번째 보스 처치 후 총 20초)
-        if warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - warning_start_time >= 2:
-            moving_boss = MovingBoss()
+        if first_boss_killed and warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - warning_start_time >= 2:
+            # 2번째 보스부터 체력 20씩 증가
+            hp_bonus = (boss_kill_count - 1) * 20
+            
+            # 공격 속도 증가 (0.2초씩 빨라지고 최소 0.4초까지만)
+            attack_delay = max(0.4, 1.0 - (boss_kill_count - 1) * 0.2)
+            
+            # 최종 보스인지 확인 (공격속도가 max에 도달했는지)
+            is_final = (attack_delay <= 0.4)
+            
+            moving_boss = MovingBoss(hp_bonus, attack_delay, is_final)
             boss_group.add(moving_boss)
             boss_spawned = True
             warning_shown = False
-            # print("🔥 이동형 보스 등장!")
+            # print(f"🔥 이동형 보스 등장! HP: {moving_boss.max_hp}, 공격속도: {attack_delay:.1f}초")
 
         # 화면 출력
         player_group.draw(screen)
@@ -496,6 +517,8 @@ while running:
             last_boss_death_time = 0
             warning_shown = False
             warning_start_time = 0
+            boss_kill_count = 0
+            first_boss_killed = False
             
             # 🔫 플레이어 총 레벨 초기화
             player.gun_level = 1
