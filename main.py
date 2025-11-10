@@ -39,6 +39,8 @@ class Player(pygame.sprite.Sprite):
         self.shoot_cooldown = 0.2   # 🔫 연속 발사 최소 간격(초)
         self.last_shot_time = 0
         self.shooting = False       # 키 입력 상태 추적
+        self.gun_level = 1          # 🔫 총 레벨 (1~3)
+        self.max_gun_level = 3
 
     def update(self, keys):
         if keys[pygame.K_LEFT] and self.rect.left > 0:
@@ -50,12 +52,26 @@ class Player(pygame.sprite.Sprite):
         if keys[pygame.K_DOWN] and self.rect.bottom < HEIGHT:
             self.rect.y += player_speed
 
-        # 총알 발사 (단발 모드)
+        # 총알 발사 (총 레벨에 따라 발사 개수 변경)
         current_time = time.time()
         if keys[pygame.K_SPACE]:
             if not self.shooting and self.ammo > 0 and current_time - self.last_shot_time >= self.shoot_cooldown:
-                bullet = Bullet(self.rect.centerx, self.rect.top)
-                bullet_group.add(bullet)
+                if self.gun_level == 1:
+                    # 1발 (중앙)
+                    bullet = Bullet(self.rect.centerx, self.rect.top)
+                    bullet_group.add(bullet)
+                elif self.gun_level == 2:
+                    # 2발 (좌우)
+                    bullet_left = Bullet(self.rect.centerx - 15, self.rect.top)
+                    bullet_right = Bullet(self.rect.centerx + 15, self.rect.top)
+                    bullet_group.add(bullet_left, bullet_right)
+                elif self.gun_level == 3:
+                    # 3발 (중앙, 좌, 우)
+                    bullet_center = Bullet(self.rect.centerx, self.rect.top)
+                    bullet_left = Bullet(self.rect.centerx - 20, self.rect.top)
+                    bullet_right = Bullet(self.rect.centerx + 20, self.rect.top)
+                    bullet_group.add(bullet_center, bullet_left, bullet_right)
+                
                 self.ammo -= 1
                 self.last_shot_time = current_time
                 self.shooting = True  # 🔸 한 번 눌렀을 때만 발사
@@ -135,12 +151,14 @@ class Boss(pygame.sprite.Sprite):
         # 체력 0이면 제거
         if self.hp <= 0:
             self.alive = False
-            # 폭발 크기를 크게
             explosion = Explosion(self.rect.centerx, self.rect.centery, size=200)
             explosion_group.add(explosion)
             self.kill()
-            global score
-            score += 300  # 보스 처치 보상
+            global score, last_boss_death_time, boss_spawned
+            score += 300  # 보상 점수
+            last_boss_death_time = time.time()  # 사망 시간 기록
+            boss_spawned = False  # 다음 보스 생성 가능 상태로 전환
+
 
         # 일정 시간마다 공격
         current_time = time.time()
@@ -163,6 +181,23 @@ class Boss(pygame.sprite.Sprite):
         pygame.draw.rect(surface, (255, 0, 0), (x, y, bar_width, bar_height))
         # 현재 HP(초록)
         pygame.draw.rect(surface, (0, 255, 0), (x, y, int(bar_width * ratio), bar_height))
+
+class MovingBoss(Boss):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/MovingBoss.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (220, 130))
+        self.rect = self.image.get_rect(center=(WIDTH // 2, 100))
+        self.speed_x = 3  # 좌우 이동 속도
+
+    def update(self):
+        super().update()
+
+        # 좌우로 이동
+        self.rect.x += self.speed_x
+        if self.rect.right >= WIDTH or self.rect.left <= 0:
+            self.speed_x *= -1  # 방향 반전
+
 
 class BossBullet(pygame.sprite.Sprite):
     def __init__(self, x, y):
@@ -192,16 +227,68 @@ class BulletItem(pygame.sprite.Sprite):
             self.kill()
 
 
+class GunItem(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/gunItem.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (60, 60))  # 아이템 크기
+        self.rect = self.image.get_rect(center=(random.randint(20, WIDTH - 20), 0))
+        self.speed = 3  # 떨어지는 속도
+
+    def update(self):
+        self.rect.y += self.speed
+        if self.rect.top > HEIGHT:
+            self.kill()
+
+
+class Warning(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/warning.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (300, 300))  # 경고 이미지 크기
+        self.rect = self.image.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+        self.start_time = time.time()
+        self.blink_count = 0
+        self.max_blinks = 3  # 3번 깜빡임
+        self.blink_duration = 0.3  # 각 깜빡임 지속 시간 (초)
+        self.visible = True
+        self.last_blink_time = time.time()
+
+    def update(self):
+        current_time = time.time()
+        elapsed = current_time - self.last_blink_time
+        
+        # 깜빡임 효과
+        if elapsed >= self.blink_duration:
+            self.visible = not self.visible
+            self.last_blink_time = current_time
+            if not self.visible:
+                self.blink_count += 1
+        
+        # 3번 깜빡이면 제거
+        if self.blink_count >= self.max_blinks:
+            self.kill()
+
+    def draw(self, surface):
+        if self.visible:
+            surface.blit(self.image, self.rect)
+
+
 player = Player()
 player_group = pygame.sprite.Group(player)
 enemy_group = pygame.sprite.Group()
 coin_group = pygame.sprite.Group()
 bullet_item_group = pygame.sprite.Group()
+gun_item_group = pygame.sprite.Group()
 bullet_group = pygame.sprite.Group()
 explosion_group = pygame.sprite.Group()
 boss_group = pygame.sprite.Group()
 boss_bullet_group = pygame.sprite.Group()
+warning_group = pygame.sprite.Group()
 boss_spawned = False
+last_boss_death_time = 0
+warning_shown = False  # 경고 표시 여부
+warning_start_time = 0  # 경고 시작 시간
 
 score = 0
 frame_count = 0
@@ -240,6 +327,10 @@ while running:
         if random.randint(1, 1000) <= 3:
             bullet_item_group.add(BulletItem())
 
+        # 🔫 gun_level이 3 미만일 때만 gunItem 생성
+        if player.gun_level < player.max_gun_level and random.randint(1, 1800) <= 2:
+            gun_item_group.add(GunItem())
+
         # 업데이트
         player.update(keys)
         enemy_group.update()
@@ -249,6 +340,8 @@ while running:
         boss_group.update()
         boss_bullet_group.update()
         bullet_item_group.update()
+        gun_item_group.update()
+        warning_group.update()  # 경고 업데이트 추가
 
         # 총알 충돌
         for bullet in bullet_group:
@@ -292,24 +385,63 @@ while running:
         for _ in bullet_items_collected:
             player.ammo = min(player.max_ammo, player.ammo + 5)  # 최대 탄약 초과 방지
 
+        # 🔫 총 아이템 충돌
+        gun_items_collected = pygame.sprite.spritecollide(player, gun_item_group, True)
+        for _ in gun_items_collected:
+            if player.gun_level < player.max_gun_level:
+                player.gun_level += 1
+                # print(f"🔫 총 레벨 업 현재 레벨: {player.gun_level}")
+
         # 생존 시간
         survival_time = time.time() - start_time
 
-        # 10초 뒤 보스 등장
-        if survival_time >= 10 and not boss_spawned:
+        # 첫 번째 보스 경고 및 생성
+        if survival_time >= 8 and not warning_shown and not boss_spawned and last_boss_death_time == 0:
+            warning = Warning()
+            warning_group.add(warning)
+            warning_shown = True
+            warning_start_time = time.time()
+            # print("⚠️ 보스 경고!")
+        
+        # 경고 후 2초 뒤 첫 번째 보스 생성
+        if warning_shown and not boss_spawned and not boss_group and last_boss_death_time == 0 and time.time() - warning_start_time >= 2:
             boss = Boss()
             boss_group.add(boss)
             boss_spawned = True
+            warning_shown = False
+            # print("✅ 첫 번째 보스 등장")
+
+        # 다음 보스 경고 및 생성
+        if not warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - last_boss_death_time >= 18:
+            warning = Warning()
+            warning_group.add(warning)
+            warning_shown = True
+            warning_start_time = time.time()
+            # print("⚠️ 보스 경고!")
+        
+        # 경고 후 2초 뒤 이동형 보스 생성 (첫 번째 보스 처치 후 총 20초)
+        if warning_shown and not boss_spawned and not boss_group and last_boss_death_time > 0 and time.time() - warning_start_time >= 2:
+            moving_boss = MovingBoss()
+            boss_group.add(moving_boss)
+            boss_spawned = True
+            warning_shown = False
+            # print("🔥 이동형 보스 등장!")
 
         # 화면 출력
         player_group.draw(screen)
         enemy_group.draw(screen)
         coin_group.draw(screen)
         bullet_item_group.draw(screen)
+        gun_item_group.draw(screen)
         bullet_group.draw(screen)
         explosion_group.draw(screen)
         boss_group.draw(screen)
         boss_bullet_group.draw(screen)
+        
+        # 경고 이미지 그리기 (깜빡임 효과 포함)
+        for warning in warning_group:
+            warning.draw(screen)
+        
         for boss in boss_group:
             boss.draw_hp_bar(screen)
 
@@ -317,10 +449,12 @@ while running:
         score_text = font.render(f"Score: {score}", True, (0, 0, 0))
         time_text = font.render(f"Time: {int(survival_time)}s", True, (0, 0, 0))
         ammo_text = font.render(f"Ammo: {player.ammo}/{player.max_ammo}", True, (0, 0, 0))
+        gun_text = font.render(f"Gun Lv: {player.gun_level}", True, (0, 0, 0))
 
         screen.blit(score_text, (10, 10))
         screen.blit(time_text, (10, 50))
         screen.blit(ammo_text, (10, 90))
+        screen.blit(gun_text, (10, 130))
 
     else:
         # ============ 게임 오버 화면 ============
@@ -351,16 +485,23 @@ while running:
             coin_group.empty()
             bullet_group.empty()
             bullet_item_group.empty()
+            gun_item_group.empty()
             explosion_group.empty()
             boss_group.empty()
             boss_bullet_group.empty()
+            warning_group.empty()
 
             # 🔹 보스 재등장 조건 초기화
             boss_spawned = False
+            last_boss_death_time = 0
+            warning_shown = False
+            warning_start_time = 0
+            
+            # 🔫 플레이어 총 레벨 초기화
+            player.gun_level = 1
+            player.ammo = player.max_ammo
         elif keys[pygame.K_q]:
             running = False
 
     pygame.display.flip()
     clock.tick(60)
-
-
