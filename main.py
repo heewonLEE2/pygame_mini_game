@@ -42,6 +42,9 @@ class Player(pygame.sprite.Sprite):
         self.shooting = False       # 키 입력 상태 추적
         self.gun_level = 1          # 🔫 총 레벨 (1~3)
         self.max_gun_level = 3
+        self.bag_level = 1          # 🎒 가방 레벨 (1~3)
+        self.max_bag_level = 3
+        self.reload_speed = 1.0     # 🎒 재장전 속도 (초)
         self.lives = 3              # 💙 목숨 (3개)
         self.max_lives = 3          # 💙 최대 목숨
         self.invincible = False     # 무적 상태
@@ -101,8 +104,8 @@ class Player(pygame.sprite.Sprite):
         else:
             self.shooting = False  # 키에서 손을 떼면 다시 발사 가능
 
-        # 1초마다 탄약 자동 회복
-        if current_time - self.last_reload_time >= 1:
+        # 1초마다 탄약 자동 회복 -> reload_speed에 따라 변경
+        if current_time - self.last_reload_time >= self.reload_speed:
             self.last_reload_time = current_time
             if self.ammo < self.max_ammo:
                 self.ammo += 1
@@ -250,7 +253,7 @@ class MovingBoss(Boss):
             if current_time - self.last_barrage_time >= self.barrage_delay:
                 self.fire_barrage()
                 self.last_barrage_time = current_time
-                self.barrage_delay = random.uniform(10, 15)  # 다음 발사까지 10~15초 랜덤
+                self.barrage_delay = random.uniform(9, 12)  # 다음 발사까지 9~12초 랜덤
     
     def fire_barrage(self):
         """보스 크기만큼 일직선으로 총알 발사"""
@@ -305,6 +308,20 @@ class GunItem(pygame.sprite.Sprite):
             self.kill()
 
 
+class BagItem(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/bagItem.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (60, 60))  # 아이템 크기
+        self.rect = self.image.get_rect(center=(random.randint(20, WIDTH - 20), 0))
+        self.speed = 3  # 떨어지는 속도
+
+    def update(self):
+        self.rect.y += self.speed
+        if self.rect.top > HEIGHT:
+            self.kill()
+
+
 class Warning(pygame.sprite.Sprite):
     def __init__(self):
         super().__init__()
@@ -344,6 +361,7 @@ enemy_group = pygame.sprite.Group()
 coin_group = pygame.sprite.Group()
 bullet_item_group = pygame.sprite.Group()
 gun_item_group = pygame.sprite.Group()
+bag_item_group = pygame.sprite.Group()
 bullet_group = pygame.sprite.Group()
 explosion_group = pygame.sprite.Group()
 boss_group = pygame.sprite.Group()
@@ -396,12 +414,16 @@ while running:
             coin_group.add(Coin())
 
         # 🔹 랜덤하게 총알 아이템 생성 (약 0.3% 확률)
-        if random.randint(1, 100) <= 3:
+        if random.randint(1, 1000) <= 3:
             bullet_item_group.add(BulletItem())
 
         # 🔫 gun_level이 3 미만일 때만 gunItem 생성
         if player.gun_level < player.max_gun_level and random.randint(1, 2000) <= 1:
             gun_item_group.add(GunItem())
+
+        # 🎒 bag_level이 2 미만일 때만 bagItem 생성
+        if player.bag_level < player.max_bag_level and random.randint(1, 2000) <= 1:
+            bag_item_group.add(BagItem())
 
         # 업데이트
         player.update(keys)
@@ -413,6 +435,7 @@ while running:
         boss_bullet_group.update()
         bullet_item_group.update()
         gun_item_group.update()
+        bag_item_group.update()
         warning_group.update()  # 경고 업데이트 추가
 
         # 총알 충돌
@@ -475,11 +498,26 @@ while running:
                 player.gun_level += 1
                 # print(f"🔫 총 레벨 업 현재 레벨: {player.gun_level}")
 
+        # 🎒 가방 아이템 충돌
+        bag_items_collected = pygame.sprite.spritecollide(player, bag_item_group, True)
+        for _ in bag_items_collected:
+            if player.bag_level < player.max_bag_level:
+                player.bag_level += 1
+                player.max_ammo += 3  # 최대 탄약 3 증가
+                player.ammo = player.max_ammo  # 현재 탄약도 최대치로 채움
+                
+                # 재장전 속도 향상 (1.0초 -> 0.8초 -> 0.6초)
+                if player.bag_level == 2:
+                    player.reload_speed = 0.8
+                elif player.bag_level == 3:
+                    player.reload_speed = 0.6
+                # print(f"🎒 가방 레벨 업! 레벨: {player.bag_level}, 최대탄약: {player.max_ammo}, 재장전: {player.reload_speed}초")
+
         # 생존 시간
         survival_time = time.time() - start_time
 
         # 첫 번째 보스 경고 및 생성
-        if survival_time >= 8 and not warning_shown and not boss_spawned and not first_boss_killed:
+        if survival_time >= 25 and not warning_shown and not boss_spawned and not first_boss_killed:
             warning = Warning()
             warning_group.add(warning)
             warning_shown = True
@@ -526,6 +564,7 @@ while running:
         coin_group.draw(screen)
         bullet_item_group.draw(screen)
         gun_item_group.draw(screen)
+        bag_item_group.draw(screen)
         bullet_group.draw(screen)
         explosion_group.draw(screen)
         boss_group.draw(screen)
@@ -555,11 +594,13 @@ while running:
         time_text = font.render(f"Time: {int(survival_time)}s", True, (0, 0, 0))
         ammo_text = font.render(f"Ammo: {player.ammo}/{player.max_ammo}", True, (0, 0, 0))
         gun_text = font.render(f"Gun Lv: {player.gun_level}", True, (0, 0, 0))
+        bag_text = font.render(f"Bag Lv: {player.bag_level}", True, (0, 0, 0))
 
         screen.blit(score_text, (10, 10))
         screen.blit(time_text, (10, 50))
         screen.blit(ammo_text, (10, 90))
         screen.blit(gun_text, (10, 130))
+        screen.blit(bag_text, (10, 170))
 
     else:
         # ============ 게임 오버 화면 ============
@@ -594,6 +635,7 @@ while running:
             bullet_group.empty()
             bullet_item_group.empty()
             gun_item_group.empty()
+            bag_item_group.empty()
             explosion_group.empty()
             boss_group.empty()
             boss_bullet_group.empty()
@@ -607,9 +649,12 @@ while running:
             boss_kill_count = 0
             first_boss_killed = False
             
-            # 🔫 플레이어 총 레벨 초기화
+            # 🔫 플레이어 능력 초기화
             player.gun_level = 1
+            player.bag_level = 1
+            player.max_ammo = 10
             player.ammo = player.max_ammo
+            player.reload_speed = 1.0
         elif keys[pygame.K_q]:
             running = False
 
