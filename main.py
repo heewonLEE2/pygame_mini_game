@@ -32,6 +32,7 @@ class Player(pygame.sprite.Sprite):
     def __init__(self):
         super().__init__()
         self.image = pygame.image.load("./assets/player.png").convert_alpha()
+        self.original_image = self.image.copy()  # 원본 이미지 저장
         self.rect = self.image.get_rect(center=(WIDTH//2, HEIGHT-50))
         self.ammo = 10
         self.max_ammo = 10
@@ -41,6 +42,12 @@ class Player(pygame.sprite.Sprite):
         self.shooting = False       # 키 입력 상태 추적
         self.gun_level = 1          # 🔫 총 레벨 (1~3)
         self.max_gun_level = 3
+        self.lives = 3              # 💙 목숨 (3개)
+        self.max_lives = 3          # 💙 최대 목숨
+        self.invincible = False     # 무적 상태
+        self.invincible_start_time = 0  # 무적 시작 시간
+        self.invincible_duration = 2.0  # 무적 지속 시간 (2초)
+        self.blink_interval = 0.1   # 깜빡임 간격
 
     def update(self, keys):
         if keys[pygame.K_LEFT] and self.rect.left > 0:
@@ -52,8 +59,24 @@ class Player(pygame.sprite.Sprite):
         if keys[pygame.K_DOWN] and self.rect.bottom < HEIGHT:
             self.rect.y += player_speed
 
-        # 총알 발사 (총 레벨에 따라 발사 개수 변경)
+        # 무적 상태 관리
         current_time = time.time()
+        if self.invincible:
+            # 무적 시간 종료 체크
+            if current_time - self.invincible_start_time >= self.invincible_duration:
+                self.invincible = False
+                self.image = self.original_image.copy()  # 원래 이미지로 복구
+            else:
+                # 깜빡임 효과
+                blink_cycle = int((current_time - self.invincible_start_time) / self.blink_interval)
+                if blink_cycle % 2 == 0:
+                    self.image = self.original_image.copy()
+                else:
+                    # 투명하게 만들기
+                    self.image = self.original_image.copy()
+                    self.image.set_alpha(50)
+
+        # 총알 발사 (총 레벨에 따라 발사 개수 변경)
         if keys[pygame.K_SPACE]:
             if not self.shooting and self.ammo > 0 and current_time - self.last_shot_time >= self.shoot_cooldown:
                 if self.gun_level == 1:
@@ -83,6 +106,17 @@ class Player(pygame.sprite.Sprite):
             self.last_reload_time = current_time
             if self.ammo < self.max_ammo:
                 self.ammo += 1
+
+    def take_damage(self):
+        """플레이어가 피해를 입었을 때 호출"""
+        if not self.invincible and self.lives > 0:
+            self.lives -= 1
+            if self.lives > 0:
+                # 아직 목숨이 남아있으면 무적 상태로 전환
+                self.invincible = True
+                self.invincible_start_time = time.time()
+            return self.lives == 0  # 목숨이 0이면 True (게임오버)
+        return False
 
 class Enemy(pygame.sprite.Sprite):
     def __init__(self):
@@ -198,6 +232,9 @@ class MovingBoss(Boss):
         
         self.rect = self.image.get_rect(center=(WIDTH // 2, 100))
         self.speed_x = 3  # 좌우 이동 속도
+        self.is_final = is_final  # 최종 보스 여부 저장
+        self.last_barrage_time = time.time()  # 일직선 발사 마지막 시간
+        self.barrage_delay = random.uniform(4, 8)  # 4~8초 사이 랜덤
 
     def update(self):
         super().update()
@@ -206,6 +243,24 @@ class MovingBoss(Boss):
         self.rect.x += self.speed_x
         if self.rect.right >= WIDTH or self.rect.left <= 0:
             self.speed_x *= -1  # 방향 반전
+        
+        # 최종 보스일 때 일직선 총알 발사
+        if self.is_final:
+            current_time = time.time()
+            if current_time - self.last_barrage_time >= self.barrage_delay:
+                self.fire_barrage()
+                self.last_barrage_time = current_time
+                self.barrage_delay = random.uniform(10, 15)  # 다음 발사까지 10~15초 랜덤
+    
+    def fire_barrage(self):
+        """보스 크기만큼 일직선으로 총알 발사"""
+        boss_width = self.rect.width
+        bullet_count = boss_width // 20  # 총알 크기(20)로 나눠서 개수 계산
+        
+        for i in range(bullet_count):
+            x = self.rect.left + (i * 20) + 10  # 총알 간격 20, 중앙 정렬
+            boss_bullet = BossBullet(x, self.rect.bottom)
+            boss_bullet_group.add(boss_bullet)
 
 
 class BossBullet(pygame.sprite.Sprite):
@@ -259,7 +314,7 @@ class Warning(pygame.sprite.Sprite):
         self.start_time = time.time()
         self.blink_count = 0
         self.max_blinks = 3  # 3번 깜빡임
-        self.blink_duration = 0.3  # 각 깜빡임 지속 시간 (초)
+        self.blink_duration = 0.45  # 각 깜빡임 지속 시간 (초)
         self.visible = True
         self.last_blink_time = time.time()
 
@@ -301,6 +356,12 @@ warning_start_time = 0  # 경고 시작 시간
 boss_kill_count = 0  # 보스 처치 횟수
 first_boss_killed = False  # 첫 번째 보스 처치 여부
 
+# 하트 이미지 로드
+heart_on_image = pygame.image.load("./assets/heart_on.png").convert_alpha()
+heart_on_image = pygame.transform.scale(heart_on_image, (40, 40))
+heart_off_image = pygame.image.load("./assets/heart_off.png").convert_alpha()
+heart_off_image = pygame.transform.scale(heart_off_image, (40, 40))
+
 score = 0
 frame_count = 0
 
@@ -339,7 +400,7 @@ while running:
             bullet_item_group.add(BulletItem())
 
         # 🔫 gun_level이 3 미만일 때만 gunItem 생성
-        if player.gun_level < player.max_gun_level and random.randint(1, 1800) <= 2:
+        if player.gun_level < player.max_gun_level and random.randint(1, 2000) <= 1:
             gun_item_group.add(GunItem())
 
         # 업데이트
@@ -377,15 +438,26 @@ while running:
                 score += 10
 
         # 충돌 감지 → 게임오버로 전환
-        if pygame.sprite.spritecollide(player, enemy_group, False):
-            game_over = True
-            end_time = time.time()
-            survival_time = end_time - start_time
+        if not player.invincible:  # 무적 상태가 아닐 때만 충돌 체크
+            # 적과의 충돌 (충돌한 적 제거)
+            hit_enemies = pygame.sprite.spritecollide(player, enemy_group, True)
+            if hit_enemies:
+                # 충돌한 적마다 폭발 효과
+                for enemy in hit_enemies:
+                    explosion = Explosion(enemy.rect.centerx, enemy.rect.centery)
+                    explosion_group.add(explosion)
+                # 피해 처리
+                if player.take_damage():
+                    game_over = True
+                    end_time = time.time()
+                    survival_time = end_time - start_time
 
-        if pygame.sprite.spritecollide(player, boss_bullet_group, True):
-            game_over = True
-            end_time = time.time()
-            survival_time = end_time - start_time
+            # 보스 총알과의 충돌 (총알 제거)
+            if pygame.sprite.spritecollide(player, boss_bullet_group, True):
+                if player.take_damage():
+                    game_over = True
+                    end_time = time.time()
+                    survival_time = end_time - start_time
 
         # 코인 충돌
         coins_collected = pygame.sprite.spritecollide(player, coin_group, True)
@@ -466,6 +538,18 @@ while running:
         for boss in boss_group:
             boss.draw_hp_bar(screen)
 
+        # 하트 표시 (우측 상단)
+        heart_x_start = WIDTH - 150  # 우측에서 150픽셀 떨어진 위치
+        heart_y = 10
+        heart_spacing = 45  # 하트 간격
+        
+        for i in range(player.max_lives):
+            heart_x = heart_x_start + (i * heart_spacing)
+            if i < player.lives:
+                screen.blit(heart_on_image, (heart_x, heart_y))
+            else:
+                screen.blit(heart_off_image, (heart_x, heart_y))
+
         font = pygame.font.SysFont(None, 36)
         score_text = font.render(f"Score: {score}", True, (0, 0, 0))
         time_text = font.render(f"Time: {int(survival_time)}s", True, (0, 0, 0))
@@ -500,6 +584,9 @@ while running:
             start_time = time.time()
             game_over = False
             player.rect.center = (WIDTH//2, HEIGHT-50)
+            player.lives = 3  # 목숨 초기화
+            player.invincible = False  # 무적 상태 초기화
+            player.image = player.original_image.copy()  # 이미지 복구
 
             # 🔹 모든 그룹 초기화
             enemy_group.empty()
