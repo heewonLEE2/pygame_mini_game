@@ -106,10 +106,10 @@ class Bullet(pygame.sprite.Sprite):
             self.kill()  # 화면 위로 나가면 제거
 
 class Explosion(pygame.sprite.Sprite):
-    def __init__(self, x, y):
+    def __init__(self, x, y, size=60):  # 기본 폭발 크기 60
         super().__init__()
         self.image = pygame.image.load("./assets/explosion.png").convert_alpha()
-        self.image = pygame.transform.scale(self.image, (60, 60))  # 폭발 크기
+        self.image = pygame.transform.scale(self.image, (size, size))
         self.rect = self.image.get_rect(center=(x, y))
         self.start_time = time.time()
         self.duration = 0.4  # 폭발 지속 시간(초)
@@ -119,12 +119,89 @@ class Explosion(pygame.sprite.Sprite):
         if time.time() - self.start_time > self.duration:
             self.kill()
 
+class Boss(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/boss.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (200, 120))  # 보스 크기
+        self.rect = self.image.get_rect(center=(WIDTH // 2, 100))  # 화면 상단 중앙
+        self.hp = 30
+        self.max_hp = 30
+        self.last_attack_time = time.time()
+        self.attack_delay = 1.0  # 1초마다 공격
+        self.alive = True
+
+    def update(self):
+        # 체력 0이면 제거
+        if self.hp <= 0:
+            self.alive = False
+            # 폭발 크기를 크게
+            explosion = Explosion(self.rect.centerx, self.rect.centery, size=200)
+            explosion_group.add(explosion)
+            self.kill()
+            global score
+            score += 300  # 보스 처치 보상
+
+        # 일정 시간마다 공격
+        current_time = time.time()
+        if current_time - self.last_attack_time > self.attack_delay:
+            self.last_attack_time = current_time
+            # 화면 가로 범위 내 랜덤 위치에서 총알 발사
+            x = random.randint(self.rect.left, self.rect.right)
+            boss_bullet = BossBullet(x, self.rect.bottom)
+            boss_bullet_group.add(boss_bullet)
+
+    def draw_hp_bar(self, surface):
+        # HP 비율 계산
+        ratio = self.hp / self.max_hp
+        bar_width = 180
+        bar_height = 12
+        x = self.rect.centerx - bar_width // 2
+        y = self.rect.top - 20
+
+        # 배경(빨강)
+        pygame.draw.rect(surface, (255, 0, 0), (x, y, bar_width, bar_height))
+        # 현재 HP(초록)
+        pygame.draw.rect(surface, (0, 255, 0), (x, y, int(bar_width * ratio), bar_height))
+
+class BossBullet(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.image = pygame.image.load("./assets/bossBullet.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (20, 40))
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speed = 5  # 아래로 이동
+
+    def update(self):
+        self.rect.y += self.speed
+        if self.rect.top > HEIGHT:
+            self.kill()
+
+
+class BulletItem(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/bulletItem.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (35, 35))  # 아이템 크기
+        self.rect = self.image.get_rect(center=(random.randint(20, WIDTH - 20), 0))
+        self.speed = 3  # 떨어지는 속도
+
+    def update(self):
+        self.rect.y += self.speed
+        if self.rect.top > HEIGHT:
+            self.kill()
+
+
 player = Player()
 player_group = pygame.sprite.Group(player)
 enemy_group = pygame.sprite.Group()
 coin_group = pygame.sprite.Group()
+bullet_item_group = pygame.sprite.Group()
 bullet_group = pygame.sprite.Group()
 explosion_group = pygame.sprite.Group()
+boss_group = pygame.sprite.Group()
+boss_bullet_group = pygame.sprite.Group()
+boss_spawned = False
 
 score = 0
 frame_count = 0
@@ -159,12 +236,19 @@ while running:
         if frame_count % 80 == 0:
             coin_group.add(Coin())
 
+        # 🔹 랜덤하게 총알 아이템 생성 (약 0.3% 확률)
+        if random.randint(1, 1000) <= 3:
+            bullet_item_group.add(BulletItem())
+
         # 업데이트
         player.update(keys)
         enemy_group.update()
         coin_group.update()
         bullet_group.update()
         explosion_group.update()
+        boss_group.update()
+        boss_bullet_group.update()
+        bullet_item_group.update()
 
         # 총알 충돌
         for bullet in bullet_group:
@@ -180,8 +264,21 @@ while running:
                     enemy.kill()
                     score += 50
 
+        # 보스 총알 충돌
+        for bullet in bullet_group:
+            hit_boss = pygame.sprite.spritecollide(bullet, boss_group, False)
+            for b in hit_boss:
+                b.hp -= 1
+                bullet.kill()
+                score += 10
+
         # 충돌 감지 → 게임오버로 전환
         if pygame.sprite.spritecollide(player, enemy_group, False):
+            game_over = True
+            end_time = time.time()
+            survival_time = end_time - start_time
+
+        if pygame.sprite.spritecollide(player, boss_bullet_group, True):
             game_over = True
             end_time = time.time()
             survival_time = end_time - start_time
@@ -190,21 +287,36 @@ while running:
         coins_collected = pygame.sprite.spritecollide(player, coin_group, True)
         score += len(coins_collected) * 10
 
+        # 🔹 총알 아이템 충돌
+        bullet_items_collected = pygame.sprite.spritecollide(player, bullet_item_group, True)
+        for _ in bullet_items_collected:
+            player.ammo = min(player.max_ammo, player.ammo + 5)  # 최대 탄약 초과 방지
+
         # 생존 시간
         survival_time = time.time() - start_time
+
+        # 10초 뒤 보스 등장
+        if survival_time >= 10 and not boss_spawned:
+            boss = Boss()
+            boss_group.add(boss)
+            boss_spawned = True
 
         # 화면 출력
         player_group.draw(screen)
         enemy_group.draw(screen)
         coin_group.draw(screen)
+        bullet_item_group.draw(screen)
         bullet_group.draw(screen)
         explosion_group.draw(screen)
-
+        boss_group.draw(screen)
+        boss_bullet_group.draw(screen)
+        for boss in boss_group:
+            boss.draw_hp_bar(screen)
 
         font = pygame.font.SysFont(None, 36)
         score_text = font.render(f"Score: {score}", True, (0, 0, 0))
         time_text = font.render(f"Time: {int(survival_time)}s", True, (0, 0, 0))
-        ammo_text = font.render(f"Bullet: {player.ammo}/{player.max_ammo}", True, (0, 0, 0))
+        ammo_text = font.render(f"Ammo: {player.ammo}/{player.max_ammo}", True, (0, 0, 0))
 
         screen.blit(score_text, (10, 10))
         screen.blit(time_text, (10, 50))
@@ -233,9 +345,18 @@ while running:
             start_time = time.time()
             game_over = False
             player.rect.center = (WIDTH//2, HEIGHT-50)
+
+            # 🔹 모든 그룹 초기화
             enemy_group.empty()
             coin_group.empty()
             bullet_group.empty()
+            bullet_item_group.empty()
+            explosion_group.empty()
+            boss_group.empty()
+            boss_bullet_group.empty()
+
+            # 🔹 보스 재등장 조건 초기화
+            boss_spawned = False
         elif keys[pygame.K_q]:
             running = False
 
