@@ -1,13 +1,23 @@
 import pygame, random, sys, time
-
+import requests
 
 pygame.init()
 WIDTH, HEIGHT = 600, 800
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 
+# 서버 URL 설정
+# SERVER_URL = "http://localhost:5000"  # 본인 컴퓨터에서 실행 시
+SERVER_URL = "http://192.168.9.4:5000"  # 다른 사람이 접속 시 (주석 해제하고 배포)
+
 # 색상
 WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+GRAY = (100, 100, 100)
+LIGHT_GRAY = (200, 200, 200)
+BLUE = (0, 120, 255)
+GREEN = (0, 200, 0)
+RED = (255, 0, 0)
 
 # 배경 이미지 로드 (초기에 한 번만)
 background = pygame.image.load("./assets/background.png").convert()
@@ -384,6 +394,83 @@ class Warning(pygame.sprite.Sprite):
             surface.blit(self.image, self.rect)
 
 
+# ============ 서버 통신 함수 ============
+def save_score_to_server(nickname, score, survival_time):
+    """서버에 점수 저장"""
+    try:
+        response = requests.post(
+            f'{SERVER_URL}/api/scores',
+            json={
+                'nickname': nickname,
+                'score': score,
+                'survival_time': survival_time
+            },
+            timeout=5
+        )
+        if response.status_code == 201:
+            return {'success': True, 'data': response.json()}
+        else:
+            return {'success': False, 'message': 'Server error'}
+    except requests.exceptions.ConnectionError:
+        return {'success': False, 'message': 'Server not available'}
+    except requests.exceptions.Timeout:
+        return {'success': False, 'message': 'Request timeout'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+
+def get_rankings_from_server():
+    """서버에서 랭킹 조회"""
+    try:
+        response = requests.get(f'{SERVER_URL}/api/scores', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                return {'success': True, 'rankings': data.get('data', [])}
+        return {'success': False, 'message': 'Failed to fetch rankings'}
+    except requests.exceptions.ConnectionError:
+        return {'success': False, 'message': 'Server not available'}
+    except requests.exceptions.Timeout:
+        return {'success': False, 'message': 'Request timeout'}
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
+
+
+# ============ 텍스트 입력 처리 함수 ============
+def handle_text_input(event, current_text, max_length=10):
+    """키보드 입력을 처리하여 텍스트 반환"""
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_BACKSPACE:
+            return current_text[:-1]
+        elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+            return current_text  # Enter는 별도 처리
+        elif len(current_text) < max_length:
+            # 영문, 숫자, 일부 특수문자만 허용
+            if event.unicode.isprintable() and (event.unicode.isalnum() or event.unicode in '_-'):
+                return current_text + event.unicode
+    return current_text
+
+
+def draw_text_centered(surface, text, font, color, y):
+    """중앙 정렬 텍스트 그리기"""
+    text_surface = font.render(text, True, color)
+    text_rect = text_surface.get_rect(center=(WIDTH // 2, y))
+    surface.blit(text_surface, text_rect)
+
+
+def draw_button(surface, text, x, y, w, h, font, text_color, bg_color, border_color=None):
+    """버튼 그리기"""
+    pygame.draw.rect(surface, bg_color, (x, y, w, h))
+    if border_color:
+        pygame.draw.rect(surface, border_color, (x, y, w, h), 3)
+    
+    text_surface = font.render(text, True, text_color)
+    text_rect = text_surface.get_rect(center=(x + w // 2, y + h // 2))
+    surface.blit(text_surface, text_rect)
+    
+    return pygame.Rect(x, y, w, h)
+
+
 player = Player()
 player_group = pygame.sprite.Group(player)
 enemy_group = pygame.sprite.Group()
@@ -413,6 +500,13 @@ heart_off_image = pygame.transform.scale(heart_off_image, (40, 40))
 score = 0
 frame_count = 0
 
+# 게임 상태 관리
+game_state = "playing"  # "playing", "game_over", "enter_nickname", "view_rankings"
+nickname_input = ""
+rankings_data = []
+save_result_message = ""
+message_timer = 0
+
 running = True
 game_over = False
 
@@ -423,8 +517,33 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        
+        # 닉네임 입력 상태에서 키보드 입력 처리
+        if game_state == "enter_nickname":
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    # Enter 키: 저장
+                    if len(nickname_input.strip()) > 0:
+                        result = save_score_to_server(nickname_input.strip(), score, int(survival_time))
+                        if result['success']:
+                            save_result_message = "Score saved successfully!"
+                            message_timer = time.time()
+                            game_state = "game_over"
+                        else:
+                            save_result_message = f"Error: {result['message']}"
+                            message_timer = time.time()
+                    else:
+                        save_result_message = "Nickname cannot be empty!"
+                        message_timer = time.time()
+                elif event.key == pygame.K_ESCAPE:
+                    # ESC 키: 취소
+                    game_state = "game_over"
+                    save_result_message = ""
+                else:
+                    # 텍스트 입력
+                    nickname_input = handle_text_input(event, nickname_input, max_length=10)
 
-    if not game_over:
+    if game_state == "playing":
         # ============ 게임 진행 중 ============
         # 배경 스크롤
         bg_y1 += bg_speed
@@ -506,14 +625,14 @@ while running:
                     explosion_group.add(explosion)
                 # 피해 처리
                 if player.take_damage():
-                    game_over = True
+                    game_state = "game_over"
                     end_time = time.time()
                     survival_time = end_time - start_time
 
             # 보스 총알과의 충돌 (총알 제거)
             if pygame.sprite.spritecollide(player, boss_bullet_group, True):
                 if player.take_damage():
-                    game_over = True
+                    game_state = "game_over"
                     end_time = time.time()
                     survival_time = end_time - start_time
 
@@ -644,28 +763,79 @@ while running:
         screen.blit(gun_text, (10, 130))
         screen.blit(bag_text, (10, 170))
 
-    else:
-        # ============ 게임 오버 화면 ============
+    elif game_state == "game_over":
+        # ============ 게임 오버 메뉴 화면 ============
         font_large = pygame.font.SysFont(None, 72)
+        font_medium = pygame.font.SysFont(None, 48)
         font_small = pygame.font.SysFont(None, 36)
 
-        gameover_text = font_large.render("GAME OVER", True, (255, 0, 0))
-        score_text = font_small.render(f"Final Score: {score}", True, (0, 0, 0))
-        time_text = font_small.render(f"Survival Time: {int(survival_time)}s", True, (0, 0, 0))
-        restart_text = font_small.render("Press R to Restart or Q to Quit", True, (100, 100, 100))
+        draw_text_centered(screen, "GAME OVER", font_large, RED, 150)
+        draw_text_centered(screen, f"Final Score: {score}", font_medium, BLACK, 240)
+        draw_text_centered(screen, f"Survival Time: {int(survival_time)}s", font_medium, BLACK, 290)
 
-        screen.blit(gameover_text, (WIDTH//2 - 180, HEIGHT//2 - 100))
-        screen.blit(score_text, (WIDTH//2 - 100, HEIGHT//2))
-        screen.blit(time_text, (WIDTH//2 - 130, HEIGHT//2 + 40))
-        screen.blit(restart_text, (WIDTH//2 - 180, HEIGHT//2 + 100))
+        # 메시지 표시 (3초간)
+        if save_result_message and time.time() - message_timer < 3:
+            color = GREEN if "success" in save_result_message.lower() else RED
+            draw_text_centered(screen, save_result_message, font_small, color, 350)
 
-        # 키 입력 처리
-        if keys[pygame.K_r]:
+        # 버튼 그리기
+        btn_width, btn_height = 250, 50
+        btn_x = (WIDTH - btn_width) // 2
+        
+        btn_register = draw_button(screen, "1. Register Score", btn_x, 420, btn_width, btn_height, 
+                                   font_small, WHITE, BLUE, BLACK)
+        btn_rankings = draw_button(screen, "2. View Rankings", btn_x, 490, btn_width, btn_height, 
+                                   font_small, WHITE, GREEN, BLACK)
+        
+        draw_text_centered(screen, "R: Restart  |  Q: Quit", font_small, GRAY, 600)
+
+        # 마우스 클릭 처리
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_clicked = pygame.mouse.get_pressed()[0]
+        
+        if mouse_clicked:
+            if btn_register.collidepoint(mouse_pos):
+                game_state = "enter_nickname"
+                nickname_input = ""
+                save_result_message = ""
+                pygame.time.wait(200)  # 중복 클릭 방지
+            elif btn_rankings.collidepoint(mouse_pos):
+                game_state = "view_rankings"
+                result = get_rankings_from_server()
+                if result['success']:
+                    rankings_data = result['rankings']
+                else:
+                    rankings_data = []
+                    save_result_message = result['message']
+                    message_timer = time.time()
+                pygame.time.wait(200)
+
+        # 키보드 입력 처리
+        if keys[pygame.K_1]:
+            game_state = "enter_nickname"
+            nickname_input = ""
+            save_result_message = ""
+            pygame.time.wait(200)
+        elif keys[pygame.K_2]:
+            game_state = "view_rankings"
+            result = get_rankings_from_server()
+            if result['success']:
+                rankings_data = result['rankings']
+            else:
+                rankings_data = []
+                save_result_message = result['message']
+                message_timer = time.time()
+            pygame.time.wait(200)
+        elif keys[pygame.K_r]:
             # 게임 재시작
             score = 0
             frame_count = 0
             start_time = time.time()
+            game_state = "playing"
             game_over = False
+            nickname_input = ""
+            save_result_message = ""
+            rankings_data = []
             player.rect.center = (WIDTH//2, HEIGHT-50)
             player.lives = 3  # 목숨 초기화
             player.invincible = False  # 무적 상태 초기화
@@ -701,6 +871,94 @@ while running:
             player.reload_speed = 1.0
         elif keys[pygame.K_q]:
             running = False
+
+    elif game_state == "enter_nickname":
+        # ============ 닉네임 입력 화면 ============
+        font_large = pygame.font.SysFont(None, 60)
+        font_medium = pygame.font.SysFont(None, 42)
+        font_small = pygame.font.SysFont(None, 32)
+
+        draw_text_centered(screen, "Register Your Score", font_large, BLACK, 150)
+        draw_text_centered(screen, f"Score: {score}  |  Time: {int(survival_time)}s", font_medium, GRAY, 220)
+        
+        draw_text_centered(screen, "Enter Nickname (Max 10 chars)", font_small, BLACK, 300)
+        
+        # 입력 박스 그리기
+        input_box_x = WIDTH // 2 - 150
+        input_box_y = 350
+        input_box_w = 300
+        input_box_h = 50
+        pygame.draw.rect(screen, LIGHT_GRAY, (input_box_x, input_box_y, input_box_w, input_box_h))
+        pygame.draw.rect(screen, BLACK, (input_box_x, input_box_y, input_box_w, input_box_h), 3)
+        
+        # 입력된 텍스트 표시
+        input_text = font_medium.render(nickname_input + "|", True, BLACK)
+        input_rect = input_text.get_rect(center=(WIDTH // 2, input_box_y + input_box_h // 2))
+        screen.blit(input_text, input_rect)
+        
+        draw_text_centered(screen, "Press ENTER to Save  |  ESC to Cancel", font_small, GRAY, 480)
+        
+        # 메시지 표시
+        if save_result_message and time.time() - message_timer < 3:
+            color = GREEN if "success" in save_result_message.lower() else RED
+            draw_text_centered(screen, save_result_message, font_small, color, 550)
+
+    elif game_state == "view_rankings":
+        # ============ 랭킹 확인 화면 ============
+        font_large = pygame.font.SysFont(None, 60)
+        font_medium = pygame.font.SysFont(None, 36)
+        font_small = pygame.font.SysFont(None, 28)
+
+        draw_text_centered(screen, "TOP 10 RANKINGS", font_large, BLACK, 50)
+        
+        if rankings_data:
+            # 테이블 헤더
+            y_offset = 120
+            header_text = f"{'Rank':<6}{'Nickname':<15}{'Score':<10}{'Time':<8}"
+            header_surface = font_small.render(header_text, True, BLACK)
+            screen.blit(header_surface, (50, y_offset))
+            
+            # 구분선
+            pygame.draw.line(screen, BLACK, (50, y_offset + 30), (WIDTH - 50, y_offset + 30), 2)
+            
+            # 랭킹 데이터 표시
+            y_offset = 160
+            for ranking in rankings_data[:10]:
+                rank = ranking['rank']
+                nickname = ranking['nickname'][:12]  # 최대 12자
+                score_val = ranking['score']
+                time_val = ranking['survival_time']
+                
+                # 상위 3위는 색상 변경
+                if rank == 1:
+                    color = (255, 215, 0)  # 금색
+                elif rank == 2:
+                    color = (192, 192, 192)  # 은색
+                elif rank == 3:
+                    color = (205, 127, 50)  # 동색
+                else:
+                    color = BLACK
+                
+                ranking_text = f"{rank:<6}{nickname:<15}{score_val:<10}{time_val}s"
+                ranking_surface = font_small.render(ranking_text, True, color)
+                screen.blit(ranking_surface, (50, y_offset))
+                y_offset += 40
+                
+                if y_offset > 700:  # 화면 넘어가면 중단
+                    break
+        else:
+            # 랭킹 데이터 없음
+            if save_result_message:
+                draw_text_centered(screen, f"Error: {save_result_message}", font_medium, RED, 300)
+            else:
+                draw_text_centered(screen, "No ranking data available", font_medium, GRAY, 300)
+        
+        draw_text_centered(screen, "Press ESC to Go Back", font_small, GRAY, HEIGHT - 50)
+        
+        # ESC로 돌아가기
+        if keys[pygame.K_ESCAPE]:
+            game_state = "game_over"
+            pygame.time.wait(200)
 
     pygame.display.flip()
     clock.tick(60)
