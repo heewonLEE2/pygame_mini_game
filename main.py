@@ -51,16 +51,31 @@ class Player(pygame.sprite.Sprite):
         self.invincible_start_time = 0  # 무적 시작 시간
         self.invincible_duration = 2.0  # 무적 지속 시간 (2초)
         self.blink_interval = 0.1   # 깜빡임 간격
+        self.speed_boost = False    # 🚀 속도 증가 상태
+        self.speed_boost_start_time = 0  # 속도 증가 시작 시간
+        self.speed_boost_duration = 4.0  # 속도 증가 지속 시간 (4초)
 
     def update(self, keys):
+        # 속도 증가 상태 확인
+        current_time = time.time()
+        current_speed = player_speed
+        
+        if self.speed_boost:
+            # 속도 증가 시간 종료 체크
+            if current_time - self.speed_boost_start_time >= self.speed_boost_duration:
+                self.speed_boost = False
+            else:
+                current_speed = player_speed * 1.5  # 1.5배 속도
+        
+        # 이동 (속도 증가 적용)
         if keys[pygame.K_LEFT] and self.rect.left > 0:
-            self.rect.x -= player_speed
+            self.rect.x -= current_speed
         if keys[pygame.K_RIGHT] and self.rect.right < WIDTH:
-            self.rect.x += player_speed
+            self.rect.x += current_speed
         if keys[pygame.K_UP] and self.rect.top > 0:
-            self.rect.y -= player_speed
+            self.rect.y -= current_speed
         if keys[pygame.K_DOWN] and self.rect.bottom < HEIGHT:
-            self.rect.y += player_speed
+            self.rect.y += current_speed
 
         # 무적 상태 관리
         current_time = time.time()
@@ -322,6 +337,20 @@ class BagItem(pygame.sprite.Sprite):
             self.kill()
 
 
+class SpeedItem(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.image.load("./assets/speedItem.png").convert_alpha()
+        self.image = pygame.transform.scale(self.image, (50, 50))  # 아이템 크기
+        self.rect = self.image.get_rect(center=(random.randint(20, WIDTH - 20), 0))
+        self.speed = 3  # 떨어지는 속도
+
+    def update(self):
+        self.rect.y += self.speed
+        if self.rect.top > HEIGHT:
+            self.kill()
+
+
 class Warning(pygame.sprite.Sprite):
     def __init__(self):
         super().__init__()
@@ -362,6 +391,7 @@ coin_group = pygame.sprite.Group()
 bullet_item_group = pygame.sprite.Group()
 gun_item_group = pygame.sprite.Group()
 bag_item_group = pygame.sprite.Group()
+speed_item_group = pygame.sprite.Group()
 bullet_group = pygame.sprite.Group()
 explosion_group = pygame.sprite.Group()
 boss_group = pygame.sprite.Group()
@@ -413,8 +443,8 @@ while running:
         if frame_count % 80 == 0:
             coin_group.add(Coin())
 
-        # 🔹 랜덤하게 총알 아이템 생성 (약 0.3% 확률)
-        if random.randint(1, 1000) <= 3:
+        # 🔹 랜덤하게 총알 아이템 생성 (약 0.25% 확률)
+        if random.randint(1, 1000) <= 2.5:
             bullet_item_group.add(BulletItem())
 
         # 🔫 gun_level이 3 미만일 때만 gunItem 생성
@@ -424,6 +454,10 @@ while running:
         # 🎒 bag_level이 2 미만일 때만 bagItem 생성
         if player.bag_level < player.max_bag_level and random.randint(1, 2000) <= 1:
             bag_item_group.add(BagItem())
+
+        # 🚀 speedItem 생성 (약 0.1% 확률)
+        if random.randint(1, 1000) <= 1:
+            speed_item_group.add(SpeedItem())
 
         # 업데이트
         player.update(keys)
@@ -436,6 +470,7 @@ while running:
         bullet_item_group.update()
         gun_item_group.update()
         bag_item_group.update()
+        speed_item_group.update()
         warning_group.update()  # 경고 업데이트 추가
 
         # 총알 충돌
@@ -513,6 +548,12 @@ while running:
                     player.reload_speed = 0.6
                 # print(f"🎒 가방 레벨 업! 레벨: {player.bag_level}, 최대탄약: {player.max_ammo}, 재장전: {player.reload_speed}초")
 
+        # 🚀 스피드 아이템 충돌
+        speed_items_collected = pygame.sprite.spritecollide(player, speed_item_group, True)
+        for _ in speed_items_collected:
+            player.speed_boost = True
+            player.speed_boost_start_time = time.time()
+
         # 생존 시간
         survival_time = time.time() - start_time
 
@@ -565,6 +606,7 @@ while running:
         bullet_item_group.draw(screen)
         gun_item_group.draw(screen)
         bag_item_group.draw(screen)
+        speed_item_group.draw(screen)
         bullet_group.draw(screen)
         explosion_group.draw(screen)
         boss_group.draw(screen)
@@ -628,6 +670,7 @@ while running:
             player.lives = 3  # 목숨 초기화
             player.invincible = False  # 무적 상태 초기화
             player.image = player.original_image.copy()  # 이미지 복구
+            player.speed_boost = False  # 🚀 속도 증가 상태 초기화
 
             # 🔹 모든 그룹 초기화
             enemy_group.empty()
@@ -636,6 +679,7 @@ while running:
             bullet_item_group.empty()
             gun_item_group.empty()
             bag_item_group.empty()
+            speed_item_group.empty()
             explosion_group.empty()
             boss_group.empty()
             boss_bullet_group.empty()
